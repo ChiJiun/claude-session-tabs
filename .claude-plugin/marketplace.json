@@ -1,0 +1,6 @@
+{
+  "name": "claude-session-tabs",
+  "description": "Claude desktop 的 session 快捷列",
+  "owner": { "name": "ChiJiun" },
+  "plugins": [{ "name": "session-tabs", "source": "./" }]
+}

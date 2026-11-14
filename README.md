@@ -2,7 +2,8 @@
 
 在 Claude desktop（Code 分頁）的輸入框上方加一排 session 快捷列，一鍵切換正在開發的 session。
 
-- **需要回覆**：哪個 session 跑完一輪、或在等你回答問題，就會以「● 名稱」顯示在最前面，點了直接切過去。
+- **需要回覆**（紅色，● 名稱）：要你回答才能繼續的 session，例如正在問你選擇題、等你允許工具，或回合結尾在問你問題。
+- **需要查看**（藍色，○ 名稱）：跑完一輪、看一下就好的 session；從快捷列點過去就算看過。
 - **釘選**：自己挑的常用 session，固定顯示。
 - **最近**：最近送出過訊息的 session（最多顯示 6 個）。
 - **所有 session 共用**：清單存在 Claude Code 的跨 session store，任何 session（包括舊的）載入 plugin 後都看得到同一排。
@@ -39,8 +40,11 @@ claude plugin install session-tabs --marketplace ChiJiun/claude-session-tabs
 
 ## 運作方式
 
-- 每個 session 在送出訊息時標記為「執行中」，一輪結束或呼叫 `AskUserQuestion` 時標記為「需要回覆」，結束時清掉狀態。
-- 狀態寫進共用 store，其他 session 每 3 秒讀一次並重畫快捷列；超過 24 小時的狀態不顯示。
+- 每個 session 在送出訊息時標記為「執行中」，結束時清掉狀態。
+- 「需要回覆」：呼叫 `AskUserQuestion`、要求工具權限、desktop 的 wrap_up 帶 `blocked` 問題，或回合最後一句以問號結尾（沒有 wrap_up 時）。
+- 「需要查看」：其他正常結束的回合。子代理的回合不算；你自己中斷的回合會清掉狀態。
+- 狀態寫進共用 store（含寫入時的 mod 版本），其他 session 每 3 秒讀一次並重畫快捷列；超過 24 小時的狀態不顯示。
+- 更新 mod 後，每個已開著的 session 都要執行一次 `/reload-plugins` 才會換成新版。
 - desktop 會透過 `CLAUDE_CODE_HOST_SESSION_ID` 提供 session id；mod 只在自己確實畫在 desktop 上時才採用，避免子程序（例如 `claude -p`）誤記。
 
 ## 限制

@@ -1,6 +1,6 @@
 {
   "name": "session-tabs",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "在 Claude desktop 的輸入框上方顯示 session 快捷列：需要回覆、釘選、最近使用，一鍵切換",
   "author": { "name": "ChiJiun" },
   "license": "MIT",

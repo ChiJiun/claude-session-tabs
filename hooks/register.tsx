@@ -14,6 +14,8 @@ const SHOWN_RECENT = 6
 const POLL_MS = 3000
 const PLACEHOLDER = '…'
 const STALE_MS = 24 * 60 * 60 * 1000
+// 寫進每個 session 的狀態，看得出哪些 session 還沒 /reload-plugins 載入新版
+const VERSION = '0.4.3'
 
 const STRINGS = {
   'zh-Hant': {
@@ -25,6 +27,7 @@ const STRINGS = {
     pinHere: '＋釘選這個 session',
     unpinHere: '取消釘選這個 session',
     waiting: '需要回覆：',
+    review: '需要查看：',
     untitled: '（未命名）',
     working: '執行中',
     addDesc: '把目前的 session（或指定 id）釘選到快捷列',
@@ -50,6 +53,7 @@ const STRINGS = {
     pinHere: '＋置顶这个 session',
     unpinHere: '取消置顶这个 session',
     waiting: '需要回复：',
+    review: '需要查看：',
     untitled: '（未命名）',
     working: '运行中',
     addDesc: '把当前 session（或指定 id）置顶到快捷栏',
@@ -75,6 +79,7 @@ const STRINGS = {
     pinHere: '＋この session をピン留め',
     unpinHere: 'この session のピン留めを外す',
     waiting: '返信待ち：',
+    review: '確認待ち：',
     untitled: '（無題）',
     working: '実行中',
     addDesc: '今の session（または指定した id）をピン留めする',
@@ -100,6 +105,7 @@ const STRINGS = {
     pinHere: '+ Pin this session',
     unpinHere: 'Unpin this session',
     waiting: 'Needs reply:',
+    review: 'To review:',
     untitled: '(untitled)',
     working: 'working',
     addDesc: 'Pin this session (or a given id) to the quick bar',
@@ -181,6 +187,13 @@ let hostEnv = ''
 let drawsDesktop = false
 const currentId = () => (drawsDesktop ? hostEnv : '')
 
+// 這一輪結束時要不要算「需要回覆」：desktop 的 wrap_up 帶 blocked 問題時為 true；
+// usedWrapUp 表示這輪有 wrap_up，就不再用「結尾是問號」來猜
+let askedBlocking = false
+let usedWrapUp = false
+// 正在等你允許工具，工具跑完就回到執行中
+let awaitingAnswer = false
+
 // desktop 預先開好、還沒指派的 session 與暫存資料夾，名稱沒有意義
 const isScratch = (name: string) => /^(scratch|spare)-/.test(name)
 
@@ -230,13 +243,28 @@ const setStatus = async ($: EngineInterface, state: SessionStatus['state'] | und
   }
   const states = await loadStatus($)
   if (state) {
-    states[id] = { state, at: await $.clock.now(), label: await bestLabel($, id) }
+    states[id] = { state, at: await $.clock.now(), label: await bestLabel($, id), v: VERSION }
   } else {
     delete states[id]
   }
   await $.store.set('status', states)
   await update($, status, () => states)
 }
+
+const markSeen = async ($: EngineInterface, id: string) => {
+  const states = await loadStatus($)
+  const st = states[id]
+  if (!st || (st.state !== 'review' && st.state !== 'waiting')) {
+    return
+  }
+  delete states[id]
+  await $.store.set('status', states)
+  await update($, status, () => states)
+}
+
+// 舊版只有 waiting 一種，當成需要查看
+const kindOf = (st: SessionStatus | undefined) =>
+  st?.state === 'reply' ? 'reply' : st?.state === 'review' || st?.state === 'waiting' ? 'review' : st?.state
 
 // 送出訊息時把目前的 session 記到「最近」，最新的排最前面。
 // 專案資料夾用資料夾名稱；暫存資料夾用第一則訊息的開頭。
@@ -301,13 +329,16 @@ const band = async ($: EngineInterface, e: Parameters<EngineInterface['ui']['res
     allRecent.find(r => r.id === id && r.label !== PLACEHOLDER && !isScratch(r.label))?.label ??
     states[id]?.label ??
     s.untitled
-  const waiting: Tab[] = editing
-    ? []
-    : Object.entries(states)
-        .filter(([id, st]) => id !== current && st.state === 'waiting' && now - st.at < STALE_MS)
-        .sort(([, a], [, b]) => b.at - a.at)
-        .map(([id]) => ({ id, label: nameOf(id) }))
-  const waitingIds = new Set(waiting.map(t => t.id))
+  const pending = (kind: 'reply' | 'review'): Tab[] =>
+    editing
+      ? []
+      : Object.entries(states)
+          .filter(([id, st]) => id !== current && kindOf(st) === kind && now - st.at < STALE_MS)
+          .sort(([, a], [, b]) => b.at - a.at)
+          .map(([id]) => ({ id, label: nameOf(id) }))
+  const replies = pending('reply')
+  const reviews = pending('review')
+  const waitingIds = new Set([...replies, ...reviews].map(t => t.id))
 
   const tabs = allPinned.filter(t => t.id !== current && !waitingIds.has(t.id))
   const pinnedIds = new Set(allPinned.map(t => t.id))
@@ -326,11 +357,22 @@ const band = async ($: EngineInterface, e: Parameters<EngineInterface['ui']['res
 
   // 需要回覆的 session 名稱前加 ●，執行中的加 …
   const labelOf = (t: Tab) => {
-    const state = states[t.id]?.state
-    return state === 'waiting' ? `● ${t.label}` : state === 'working' ? `… ${t.label}` : t.label
+    const kind = kindOf(states[t.id])
+    return kind === 'reply'
+      ? `● ${t.label}`
+      : kind === 'review'
+        ? `○ ${t.label}`
+        : kind === 'working'
+          ? `… ${t.label}`
+          : t.label
   }
 
   const open = async (t: Tab) => {
+    try {
+      await markSeen($, t.id)
+    } catch {
+      // 清不掉就留著，不影響切換
+    }
     let reason = ''
     for (const argv of await openers($)) {
       try {
@@ -356,7 +398,7 @@ const band = async ($: EngineInterface, e: Parameters<EngineInterface['ui']['res
     }
   }
 
-  if (!editing && waiting.length === 0 && tabs.length === 0 && recents.length === 0) {
+  if (!editing && waitingIds.size === 0 && tabs.length === 0 && recents.length === 0) {
     return (
       <Box flexDirection="row" flexWrap="wrap" gap={1}>
         <Text dimColor>{s.empty}</Text>
@@ -367,13 +409,21 @@ const band = async ($: EngineInterface, e: Parameters<EngineInterface['ui']['res
 
   return (
     <Box flexDirection="row" flexWrap="wrap" gap={1}>
-      {waiting.length > 0 && (
-        <Text bold color="warning">
+      {replies.length > 0 && (
+        <Text bold color="error">
           {s.waiting}
         </Text>
       )}
-      {waiting.map(t => (
+      {replies.map(t => (
         <Button key={`w-${t.id}`} label={`● ${t.label}`} onPress={() => open(t)} />
+      ))}
+      {reviews.length > 0 && (
+        <Text bold color="suggestion">
+          {s.review}
+        </Text>
+      )}
+      {reviews.map(t => (
+        <Button key={`v-${t.id}`} label={`○ ${t.label}`} onPress={() => open(t)} />
       ))}
       {tabs.length > 0 && <Text dimColor>{s.pinned}</Text>}
       {tabs.map(t =>
@@ -406,6 +456,7 @@ export const register: Register = on => {
       hostEnv = entry === 'claude-desktop' ? ((await $.env.get('CLAUDE_CODE_HOST_SESSION_ID')) ?? '') : ''
       const lang = await readDesktopLocale($)
       await update($, locale, () => lang)
+      await $.store.delete('diag')
       await refresh($)
 
       const s = STRINGS[lang]
@@ -433,6 +484,8 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     try {
       if (!e.command) {
+        askedBlocking = false
+        usedWrapUp = false
         await touch($, e.text)
         await setStatus($, 'working')
       }
@@ -444,20 +497,60 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // 回合結束：輪到你回覆
+  // 回合結束：要你回答才能繼續的算「需要回覆」，其餘算「需要查看」。
+  // 子代理的回合不算；你自己中斷的回合表示你正在看，清掉狀態。
   on('turn.complete', async ($, e, next) => {
     try {
-      await setStatus($, 'waiting')
+      if (!e.agentId) {
+        const asksQuestion = !usedWrapUp && /[?？]\s*$/.test(e.answer.trim())
+        await setStatus($, e.isAborted ? undefined : askedBlocking || asksQuestion ? 'reply' : 'review')
+        askedBlocking = false
+        usedWrapUp = false
+      }
     } catch {
       // 同上
     }
     return next(e)
   })
 
+  // desktop 的 wrap_up：blocked 為 true 表示要等你回答才能繼續
+  on('tool.call', { tool: 'mcp__ccd_turn__wrap_up' }, async ($, e, next) => {
+    const args = e as unknown as { ask?: unknown; blocked?: unknown }
+    usedWrapUp = true
+    if (typeof args.ask === 'string' && args.ask.trim() && args.blocked === true) {
+      askedBlocking = true
+    }
+    return next(e)
+  })
+
+  // 要你允許工具時算需要回覆，工具跑完（允許或拒絕後）回到執行中
+  on('classic.PermissionRequest', async ($, e, next) => {
+    try {
+      awaitingAnswer = true
+      await setStatus($, 'reply')
+    } catch {
+      // 不影響權限詢問本身
+    }
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    if (awaitingAnswer) {
+      awaitingAnswer = false
+      try {
+        await setStatus($, 'working')
+      } catch {
+        // 同上
+      }
+    }
+    return result
+  })
+
   // 問你選擇題時也算需要回覆，答完回到執行中
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     try {
-      await setStatus($, 'waiting')
+      await setStatus($, 'reply')
     } catch {
       // 不影響提問本身
     }

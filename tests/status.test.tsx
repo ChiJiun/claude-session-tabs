@@ -10,6 +10,9 @@ const BAND = {
   props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 3 },
 } as const
 
+// 每個測試開頭引擎都要重新載入 mod，機器忙時光載入就可能超過預設的 5 秒
+const SLOW = { timeoutMs: 30000 }
+
 // 模擬 desktop 環境與共用 store；回傳 store 內容讓測試檢查
 const desktop = (on: On, seed: Record<string, unknown> = {}) => {
   const store: Record<string, unknown> = { ...seed }
@@ -43,7 +46,7 @@ const statusOf = (store: Record<string, unknown>) =>
 const turn = (answer: string, extra: Record<string, unknown> = {}) =>
   ({ answer, durationMs: 1, isAborted: false, turnId: 't', reason: 'answer', ...extra }) as never
 
-test('一般回合結束算需要查看，結尾問句算需要回覆', async ($, on) => {
+test('一般回合結束算需要查看，結尾問句算需要回覆', SLOW, async ($, on) => {
   mock.clock(on)
   const store = desktop(on)
   await $.session.start({ cwd: '/work/my-project', surface: 'desktop', isInteractive: true })
@@ -58,7 +61,7 @@ test('一般回合結束算需要查看，結尾問句算需要回覆', async ($
   await ui.unmount()
 })
 
-test('wrap_up 帶 blocked 問題算需要回覆，沒 blocked 算需要查看', async ($, on) => {
+test('wrap_up 帶 blocked 問題算需要回覆，沒 blocked 算需要查看', SLOW, async ($, on) => {
   mock.clock(on)
   const store = desktop(on)
   await $.session.start({ cwd: '/work/my-project', surface: 'desktop', isInteractive: true })
@@ -75,7 +78,7 @@ test('wrap_up 帶 blocked 問題算需要回覆，沒 blocked 算需要查看', 
   await ui.unmount()
 })
 
-test('子代理的回合不改狀態，中斷的回合清掉狀態', async ($, on) => {
+test('子代理的回合不改狀態，中斷的回合清掉狀態', SLOW, async ($, on) => {
   mock.clock(on)
   const store = desktop(on)
   await $.session.start({ cwd: '/work/my-project', surface: 'desktop', isInteractive: true })
@@ -91,7 +94,7 @@ test('子代理的回合不改狀態，中斷的回合清掉狀態', async ($, o
   await ui.unmount()
 })
 
-test('其他 session 的狀態分成需要回覆與需要查看兩區，定時重讀會更新', async ($, on) => {
+test('其他 session 的狀態分成需要回覆與需要查看兩區，定時重讀會更新', SLOW, async ($, on) => {
   const clock = mock.clock(on)
   const store = desktop(on, {
     recent: [{ id: OTHER, label: 'other-project', at: 0 }],

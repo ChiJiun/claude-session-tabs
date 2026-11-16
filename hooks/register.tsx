@@ -15,7 +15,7 @@ const POLL_MS = 3000
 const PLACEHOLDER = '…'
 const STALE_MS = 24 * 60 * 60 * 1000
 // 寫進每個 session 的狀態，看得出哪些 session 還沒 /reload-plugins 載入新版
-const VERSION = '0.4.3'
+const VERSION = '0.4.4'
 
 const STRINGS = {
   'zh-Hant': {
@@ -32,13 +32,15 @@ const STRINGS = {
     working: '執行中',
     addDesc: '把目前的 session（或指定 id）釘選到快捷列',
     addHint: '[名稱] [local_… session id]',
-    removeDesc: '從快捷列移除釘選的 session',
-    removeHint: '<名稱>',
+    removeDesc: '從快捷列移除釘選的 session（不給名稱就移除目前這個）',
+    removeHint: '[名稱]',
     listDesc: '列出快捷列上的 session',
     noHost: '這個 session 不是由 desktop app 開的，無法取得 session id。請改用 /tabs-add <名稱> <local_… id>。',
     added: (l: string) => `已釘選「${l}」。`,
     removed: (l: string) => `已移除「${l}」。`,
     notFound: (l: string) => `找不到「${l}」。`,
+    notPinnedHere: '目前這個 session 沒有釘選。',
+    removeNoHost: '這個 session 不是由 desktop app 開的，無法取得 session id。請改用 /tabs-remove <名稱>。',
     listPinned: '釘選',
     listRecent: '最近使用',
     none: '（無）',
@@ -58,13 +60,15 @@ const STRINGS = {
     working: '运行中',
     addDesc: '把当前 session（或指定 id）置顶到快捷栏',
     addHint: '[名称] [local_… session id]',
-    removeDesc: '从快捷栏移除置顶的 session',
-    removeHint: '<名称>',
+    removeDesc: '从快捷栏移除置顶的 session（不给名称就移除当前这个）',
+    removeHint: '[名称]',
     listDesc: '列出快捷栏上的 session',
     noHost: '这个 session 不是由 desktop app 打开的，无法取得 session id。请改用 /tabs-add <名称> <local_… id>。',
     added: (l: string) => `已置顶「${l}」。`,
     removed: (l: string) => `已移除「${l}」。`,
     notFound: (l: string) => `找不到「${l}」。`,
+    notPinnedHere: '当前这个 session 没有置顶。',
+    removeNoHost: '这个 session 不是由 desktop app 打开的，无法取得 session id。请改用 /tabs-remove <名称>。',
     listPinned: '置顶',
     listRecent: '最近使用',
     none: '（无）',
@@ -84,13 +88,15 @@ const STRINGS = {
     working: '実行中',
     addDesc: '今の session（または指定した id）をピン留めする',
     addHint: '[名前] [local_… session id]',
-    removeDesc: 'ピン留めした session を外す',
-    removeHint: '<名前>',
+    removeDesc: 'ピン留めした session を外す（名前を省略すると今の session）',
+    removeHint: '[名前]',
     listDesc: 'クイックバーの session を一覧表示',
     noHost: 'この session は desktop app から開かれていないため id を取得できません。/tabs-add <名前> <local_… id> を使ってください。',
     added: (l: string) => `「${l}」をピン留めしました。`,
     removed: (l: string) => `「${l}」を外しました。`,
     notFound: (l: string) => `「${l}」が見つかりません。`,
+    notPinnedHere: 'この session はピン留めされていません。',
+    removeNoHost: 'この session は desktop app から開かれていないため id を取得できません。/tabs-remove <名前> を使ってください。',
     listPinned: 'ピン留め',
     listRecent: '最近使った',
     none: '（なし）',
@@ -110,13 +116,15 @@ const STRINGS = {
     working: 'working',
     addDesc: 'Pin this session (or a given id) to the quick bar',
     addHint: '[name] [local_… session id]',
-    removeDesc: 'Unpin a session from the quick bar',
-    removeHint: '<name>',
+    removeDesc: 'Unpin a session from the quick bar (this one when no name is given)',
+    removeHint: '[name]',
     listDesc: 'List the sessions on the quick bar',
     noHost: 'This session was not started by the desktop app, so its id is unknown. Use /tabs-add <name> <local_… id> instead.',
     added: (l: string) => `Pinned "${l}".`,
     removed: (l: string) => `Removed "${l}".`,
     notFound: (l: string) => `"${l}" not found.`,
+    notPinnedHere: 'This session is not pinned.',
+    removeNoHost: 'This session was not started by the desktop app, so its id is unknown. Use /tabs-remove <name> instead.',
     listPinned: 'Pinned',
     listRecent: 'Recent',
     none: '(none)',
@@ -602,6 +610,19 @@ export const register: Register = on => {
   on('command.run', { command: 'tabs-remove' }, async ($, e) => {
     const s = STRINGS[await read($, locale)]
     const label = e.args.trim()
+    if (!label) {
+      // 不給名稱：移除目前這個 session 的釘選
+      const id = currentId()
+      if (!id) {
+        return { text: s.removeNoHost }
+      }
+      const { list, next } = await unpin($, t => t.id === id)
+      const gone = list.find(t => t.id === id)
+      if (!gone) {
+        return { text: `${s.notPinnedHere}\n${describe(s, list, await read($, recent))}` }
+      }
+      return { text: `${s.removed(gone.label)}\n${describe(s, next, await read($, recent))}` }
+    }
     const { list, next } = await unpin($, t => t.label === label)
     if (next.length === list.length) {
       return { text: `${s.notFound(label)}\n${describe(s, list, await read($, recent))}` }

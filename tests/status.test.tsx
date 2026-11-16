@@ -7,10 +7,19 @@ const OTHER = 'local_22222222-2222-2222-2222-222222222222'
 const BAND = {
   plugin: 'session-tabs',
   component: 'AbovePrompt',
-  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 3 },
+  props: {
+    hasSurvey: false,
+    isCollapsed: false,
+    isWorking: false,
+    maxRows: 3,
+    bodyColumns: 120,
+    scroll: { offset: 0, bodyRows: 2 },
+    view: {},
+  },
 } as const
 
-// 每個測試開頭引擎都要重新載入 mod，機器忙時光載入就可能超過預設的 5 秒
+// 每個測試開頭引擎都要重新載入 mod，機器忙時光載入就可能超過預設的 5 秒。
+// 慢的是引擎載入，與 mod 邏輯無關（mod 的 session.start 約 60 ms），不要調回去
 const SLOW = { timeoutMs: 30000 }
 
 // 模擬 desktop 環境與共用 store；回傳 store 內容讓測試檢查
@@ -54,7 +63,7 @@ test('一般回合結束算需要查看，結尾問句算需要回覆', SLOW, as
 
   await $.turn.complete(turn('做完了。'))
   expect(statusOf(store)?.state).toBe('review')
-  expect(statusOf(store)?.v).toBe('0.4.3')
+  expect(statusOf(store)?.v).toBe('0.4.4')
 
   await $.turn.complete(turn('要用哪個方案？'))
   expect(statusOf(store)?.state).toBe('reply')
@@ -112,4 +121,47 @@ test('其他 session 的狀態分成需要回覆與需要查看兩區，定時�
   await clock.advance(3000)
   expect((await ui.find({ type: 'Text', text: /To review|需要查看|確認待ち/ }))?.text).toBeTruthy()
   await ui.unmount()
+})
+
+// 模擬使用者在 desktop 輸入框打的指令
+const slash = (args = '') =>
+  ({ args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } }) as const
+
+const pinnedIds = (store: Record<string, unknown>) => ((store.pinned as { id: string }[] | undefined) ?? []).map(t => t.id)
+
+test('/tabs-remove 不給名稱就移除目前 session 的釘選', SLOW, async ($, on) => {
+  mock.clock(on)
+  const store = desktop(on, {
+    pinned: [
+      { id: HERE, label: 'my-project' },
+      { id: OTHER, label: 'other-project' },
+    ],
+  })
+  await $.session.start({ cwd: '/work/my-project', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  const first = await $.command.run({ command: 'tabs-remove', ...slash() })
+  expect(first.text).toContain('Removed "my-project"')
+  expect(pinnedIds(store)).toEqual([OTHER])
+
+  const again = await $.command.run({ command: 'tabs-remove', ...slash('  ') })
+  expect(again.text).toContain('not pinned')
+  expect(pinnedIds(store)).toEqual([OTHER])
+
+  // 給名稱的用法不變
+  const byName = await $.command.run({ command: 'tabs-remove', ...slash('other-project') })
+  expect(byName.text).toContain('Removed "other-project"')
+  expect(pinnedIds(store)).toEqual([])
+  await ui.unmount()
+})
+
+test('/tabs-remove 不給名稱、又沒有 desktop session id 時提示改用名稱', SLOW, async ($, on) => {
+  mock.clock(on)
+  const store = desktop(on, { pinned: [{ id: HERE, label: 'my-project' }] })
+  await $.session.start({ cwd: '/work/my-project', surface: 'terminal', isInteractive: true })
+
+  // 沒畫過 desktop 的輸入框，不採用環境變數裡的 id
+  const result = await $.command.run({ command: 'tabs-remove', ...slash() })
+  expect(result.text).toContain('/tabs-remove <name>')
+  expect(pinnedIds(store)).toEqual([HERE])
 })
